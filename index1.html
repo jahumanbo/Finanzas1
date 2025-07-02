@@ -1,0 +1,484 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Panel de Finanzas Personales</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <!-- Firebase SDKs -->
+    <script type="module">
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
+        import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+        import { getFirestore, collection, query, orderBy, onSnapshot, addDoc } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+
+        window.firebase = {
+            initializeApp,
+            getAuth,
+            signInAnonymously,
+            signInWithCustomToken,
+            onAuthStateChanged,
+            getFirestore,
+            collection,
+            query,
+            orderBy,
+            onSnapshot,
+            addDoc
+        };
+    </script>
+    <!-- Chosen Palette: Warm Neutrals with Emerald/Red Accents -->
+    <!-- Application Structure Plan: A single-page dashboard layout is used for a cohesive and interactive user experience. The screen is divided into three main columns for larger screens: 1) A dedicated input form for adding income/expenses. 2) A central area for key performance indicators (KPIs) and switchable charts (Summary, Income, Expenses). 3) Two lists displaying recent transactions. This structure is chosen because it places data entry and its visual results side-by-side, providing immediate feedback and a comprehensive overview without needing to switch pages or tabs, which is more intuitive and efficient for the user than the original spreadsheet concept. -->
+    <!-- Visualization & Content Choices: 
+        - Report Info: Total Income, Total Expenses, Balance -> Goal: Inform -> Viz: KPI Cards (HTML/Tailwind) -> Interaction: Dynamic update on transaction -> Justification: Provides immediate, high-visibility summary of financial status.
+        - Report Info: Income/Expense breakdown by category -> Goal: Proportions -> Viz: Donut Chart (Chart.js/Canvas) -> Interaction: Updates on new entries, tooltips on hover -> Justification: Ideal for showing part-to-whole relationships clearly.
+        - Report Info: Comparison of Income vs. Expenses -> Goal: Compare -> Viz: Bar Chart (Chart.js/Canvas) -> Interaction: Updates with every transaction -> Justification: Best for direct comparison of totals.
+        - Report Info: List of transactions -> Goal: Organize/Inform -> Viz: Styled Lists (HTML/Tailwind) -> Interaction: Dynamically prepended on entry -> Justification: Offers a clear, chronological log for user reference.
+    -->
+    <!-- CONFIRMATION: NO SVG graphics used. NO Mermaid JS used. -->
+    <style>
+        body {
+            font-family: 'Inter', sans-serif;
+        }
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
+        .chart-container {
+            position: relative;
+            height: 320px;
+            width: 100%;
+            max-width: 450px;
+            margin: auto;
+        }
+        @media (min-width: 768px) {
+            .chart-container {
+                height: 350px;
+            }
+        }
+        .tab-button.active {
+            background-color: #10B981;
+            color: white;
+        }
+    </style>
+</head>
+<body class="bg-gray-50 text-gray-800">
+
+    <div class="container mx-auto p-4 sm:p-6 lg:p-8">
+
+        <header class="text-center mb-8">
+            <h1 class="text-3xl md:text-4xl font-bold text-gray-900">Panel de Finanzas Personales</h1>
+            <p class="text-gray-600 mt-2">Una vista interactiva de tus ingresos, egresos y saldos.</p>
+            <div class="mt-4 text-sm text-gray-500">
+                Tu ID de Usuario: <span id="user-id" class="font-semibold text-gray-700">Cargando...</span>
+            </div>
+        </header>
+
+        <main class="grid grid-cols-1 lg:grid-cols-5 xl:grid-cols-3 gap-8">
+
+            <!-- Columna Izquierda: Formularios y Listas -->
+            <section class="lg:col-span-2 xl:col-span-1 space-y-8">
+                <!-- Formulario para Añadir Transacción -->
+                <div class="bg-white p-6 rounded-xl shadow-md">
+                    <h2 class="text-xl font-bold mb-4">Añadir Transacción</h2>
+                    <p class="text-sm text-gray-600 mb-6">Registra aquí un nuevo ingreso o egreso. Los resúmenes y gráficos se actualizarán automáticamente.</p>
+                    <form id="transaction-form" class="space-y-4">
+                        <div>
+                            <label class="block text-sm font-medium text-gray-700 mb-1">Tipo de Transacción</label>
+                            <div class="flex gap-4">
+                                <label class="flex items-center">
+                                    <input type="radio" name="type" value="ingreso" class="form-radio h-4 w-4 text-emerald-600 border-gray-300 focus:ring-emerald-500" checked>
+                                    <span class="ml-2 text-gray-700">Ingreso</span>
+                                </label>
+                                <label class="flex items-center">
+                                    <input type="radio" name="type" value="egreso" class="form-radio h-4 w-4 text-red-600 border-gray-300 focus:ring-red-500">
+                                    <span class="ml-2 text-gray-700">Egreso</span>
+                                </label>
+                            </div>
+                        </div>
+                        <div>
+                            <label for="concepto" class="block text-sm font-medium text-gray-700">Concepto</label>
+                            <input type="text" id="concepto" name="concepto" required class="mt-1 block w-full border-gray-300 rounded-md shadow-sm focus:ring-emerald-500 focus:border-emerald-500 sm:text-sm p-2" placeholder="Ej: Sueldo, Alquiler">
+                        </div>
+                        <div>
+                            <label for="monto" class="block text-sm font-medium text-gray-700">Monto</label>
+                            <input type="number" id="monto" name="monto" required min="0" step="0.01" class="mt-1 block w-full border-gray-300 rounded-md shadow-sm focus:ring-emerald-500 focus:border-emerald-500 sm:text-sm p-2" placeholder="0.00">
+                        </div>
+                        <button type="submit" class="w-full bg-emerald-600 text-white font-bold py-2 px-4 rounded-lg hover:bg-emerald-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-emerald-500 transition-colors">
+                            Añadir Transacción
+                        </button>
+                    </form>
+                </div>
+                
+                <!-- Listas de Transacciones -->
+                <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-1 gap-6">
+                    <div class="bg-white p-6 rounded-xl shadow-md">
+                        <h3 class="font-bold text-lg mb-3">Últimos Ingresos</h3>
+                        <ul id="income-list" class="space-y-2 text-sm max-h-48 overflow-y-auto">
+                           <!-- JS will populate this -->
+                        </ul>
+                    </div>
+                    <div class="bg-white p-6 rounded-xl shadow-md">
+                        <h3 class="font-bold text-lg mb-3">Últimos Egresos</h3>
+                        <ul id="expense-list" class="space-y-2 text-sm max-h-48 overflow-y-auto">
+                            <!-- JS will populate this -->
+                        </ul>
+                    </div>
+                </div>
+            </section>
+
+            <!-- Columna Derecha: Resumen y Gráficos -->
+            <section class="lg:col-span-3 xl:col-span-2 bg-white p-6 rounded-xl shadow-lg">
+                <h2 class="text-xl font-bold mb-4">Resumen Financiero</h2>
+                <p class="text-sm text-gray-600 mb-6">Visualiza el estado actual de tus finanzas. Utiliza las pestañas para cambiar entre las diferentes vistas de gráficos.</p>
+                
+                <!-- KPIs -->
+                <div class="grid grid-cols-1 md:grid-cols-3 gap-4 mb-8 text-center">
+                    <div class="bg-emerald-50 p-4 rounded-lg">
+                        <h4 class="text-sm font-medium text-emerald-800">Ingresos Totales</h4>
+                        <p id="total-income" class="text-2xl font-bold text-emerald-600">S/ 0.00</p>
+                    </div>
+                    <div class="bg-red-50 p-4 rounded-lg">
+                        <h4 class="text-sm font-medium text-red-800">Egresos Totales</h4>
+                        <p id="total-expense" class="text-2xl font-bold text-red-600">S/ 0.00</p>
+                    </div>
+                    <div class="bg-blue-50 p-4 rounded-lg">
+                        <h4 class="text-sm font-medium text-blue-800">Saldo Actual</h4>
+                        <p id="balance" class="text-2xl font-bold text-blue-600">S/ 0.00</p>
+                    </div>
+                </div>
+
+                <!-- Pestañas de Gráficos -->
+                <div class="mb-4 flex justify-center border-b border-gray-200">
+                    <button data-chart="summary" class="tab-button py-2 px-4 -mb-px border-b-2 border-transparent font-medium text-sm text-gray-500 hover:text-emerald-600 hover:border-emerald-500 active">Resumen</button>
+                    <button data-chart="income" class="tab-button py-2 px-4 -mb-px border-b-2 border-transparent font-medium text-sm text-gray-500 hover:text-emerald-600 hover:border-emerald-500">Ingresos</button>
+                    <button data-chart="expense" class="tab-button py-2 px-4 -mb-px border-b-2 border-transparent font-medium text-sm text-gray-500 hover:text-emerald-600 hover:border-emerald-500">Egresos</button>
+                </div>
+                
+                <!-- Contenedores de Gráficos -->
+                <div id="summary-chart-container" class="chart-container">
+                    <canvas id="summaryChart"></canvas>
+                </div>
+                <div id="income-chart-container" class="chart-container hidden">
+                    <canvas id="incomeChart"></canvas>
+                </div>
+                <div id="expense-chart-container" class="chart-container hidden">
+                    <canvas id="expenseChart"></canvas>
+                </div>
+
+            </section>
+        </main>
+    </div>
+
+    <script type="module">
+        const { initializeApp, getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged, getFirestore, collection, query, orderBy, onSnapshot, addDoc } = window.firebase;
+
+        document.addEventListener('DOMContentLoaded', async () => {
+            // Firebase Init
+            const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
+            const firebaseConfig = JSON.parse(typeof __firebase_config !== 'undefined' ? __firebase_config : '{}');
+            const app = initializeApp(firebaseConfig);
+            const db = getFirestore(app);
+            const auth = getAuth(app);
+
+            let userId = null;
+            let transactions = [];
+
+            // Chart instances
+            let summaryChartInstance, incomeChartInstance, expenseChartInstance;
+
+            // DOM Elements
+            const form = document.getElementById('transaction-form');
+            const totalIncomeEl = document.getElementById('total-income');
+            const totalExpenseEl = document.getElementById('total-expense');
+            const balanceEl = document.getElementById('balance');
+            const incomeList = document.getElementById('income-list');
+            const expenseList = document.getElementById('expense-list');
+            const chartTabs = document.querySelectorAll('.tab-button');
+            const chartContainers = {
+                summary: document.getElementById('summary-chart-container'),
+                income: document.getElementById('income-chart-container'),
+                expense: document.getElementById('expense-chart-container'),
+            };
+            const userIdEl = document.getElementById('user-id');
+            
+            const formatCurrency = (amount) => `S/ ${amount.toFixed(2)}`;
+
+            const updateUI = () => {
+                const ingresos = transactions.filter(t => t.type === 'ingreso');
+                const egresos = transactions.filter(t => t.type === 'egreso');
+
+                const totalIncome = ingresos.reduce((sum, t) => sum + t.monto, 0);
+                const totalExpense = egresos.reduce((sum, t) => sum + t.monto, 0);
+                const balance = totalIncome - totalExpense;
+
+                totalIncomeEl.textContent = formatCurrency(totalIncome);
+                totalExpenseEl.textContent = formatCurrency(totalExpense);
+                balanceEl.textContent = formatCurrency(balance);
+                
+                // Update lists, showing most recent first
+                incomeList.innerHTML = ingresos
+                    .map(t => `<li class="flex justify-between"><span>${t.concepto}</span><span class="font-medium text-emerald-600">${formatCurrency(t.monto)}</span></li>`)
+                    .join('');
+
+                expenseList.innerHTML = egresos
+                    .map(t => `<li class="flex justify-between"><span>${t.concepto}</span><span class="font-medium text-red-600">${formatCurrency(t.monto)}</span></li>`)
+                    .join('');
+
+                // Update charts
+                renderSummaryChart(totalIncome, totalExpense, balance);
+                renderIncomeChart(ingresos);
+                renderExpenseChart(egresos);
+            };
+            
+            const aggregateByCategory = (items) => {
+                return items.reduce((acc, item) => {
+                    acc[item.concepto] = (acc[item.concepto] || 0) + item.monto;
+                    return acc;
+                }, {});
+            };
+
+            const renderSummaryChart = (income, expense, balance) => {
+                const ctx = document.getElementById('summaryChart').getContext('2d');
+                if (summaryChartInstance) summaryChartInstance.destroy();
+                summaryChartInstance = new Chart(ctx, {
+                    type: 'bar',
+                    data: {
+                        labels: ['Ingresos', 'Egresos', 'Saldo'],
+                        datasets: [{
+                            label: 'Monto',
+                            data: [income, expense, balance],
+                            backgroundColor: [
+                                'rgba(16, 185, 129, 0.7)',
+                                'rgba(239, 68, 68, 0.7)',
+                                'rgba(59, 130, 246, 0.7)',
+                            ],
+                            borderColor: [
+                                'rgb(16, 185, 129)',
+                                'rgb(239, 68, 68)',
+                                'rgb(59, 130, 246)',
+                            ],
+                            borderWidth: 1
+                        }]
+                    },
+                    options: {
+                        responsive: true,
+                        maintainAspectRatio: false,
+                        plugins: {
+                            legend: { display: false },
+                            tooltip: {
+                                callbacks: {
+                                    label: (context) => `${context.label}: ${formatCurrency(context.raw)}`
+                                }
+                            }
+                        },
+                        scales: {
+                            y: {
+                                beginAtZero: true,
+                                ticks: {
+                                    callback: (value) => formatCurrency(value)
+                                }
+                            }
+                        }
+                    }
+                });
+            };
+            
+            const renderIncomeChart = (ingresos) => {
+                const aggregatedData = aggregateByCategory(ingresos);
+                const labels = Object.keys(aggregatedData);
+                const data = Object.values(aggregatedData);
+                
+                const ctx = document.getElementById('incomeChart').getContext('2d');
+                if (incomeChartInstance) incomeChartInstance.destroy();
+                incomeChartInstance = new Chart(ctx, {
+                    type: 'doughnut',
+                    data: {
+                        labels: labels,
+                        datasets: [{
+                            label: 'Ingresos por Concepto',
+                            data: data,
+                             backgroundColor: [
+                                '#10B981', '#34D399', '#6EE7B7', '#A7F3D0', '#D1FAE5',
+                                '#059669', '#047857', '#065F46', '#064E3B', '#14532D'
+                            ],
+                            hoverOffset: 4
+                        }]
+                    },
+                     options: {
+                        responsive: true,
+                        maintainAspectRatio: false,
+                        plugins: {
+                            legend: { position: 'bottom', labels: { boxWidth: 12 } },
+                            tooltip: {
+                                callbacks: {
+                                    label: (context) => `${context.label}: ${formatCurrency(context.raw)}`
+                                }
+                            }
+                        }
+                    }
+                });
+            };
+
+            const renderExpenseChart = (egresos) => {
+                const aggregatedData = aggregateByCategory(egresos);
+                const labels = Object.keys(aggregatedData);
+                const data = Object.values(aggregatedData);
+
+                const ctx = document.getElementById('expenseChart').getContext('2d');
+                if (expenseChartInstance) expenseChartInstance.destroy();
+                expenseChartInstance = new Chart(ctx, {
+                    type: 'doughnut',
+                    data: {
+                        labels: labels,
+                        datasets: [{
+                            label: 'Egresos por Concepto',
+                            data: data,
+                            backgroundColor: [
+                                '#EF4444', '#F87171', '#FCA5A5', '#FECACA', '#FEE2E2',
+                                '#DC2626', '#B91C1C', '#991B1B', '#7F1D1D', '#450A0A'
+                            ],
+                            hoverOffset: 4
+                        }]
+                    },
+                     options: {
+                        responsive: true,
+                        maintainAspectRatio: false,
+                        plugins: {
+                            legend: { position: 'bottom', labels: { boxWidth: 12 }},
+                            tooltip: {
+                                callbacks: {
+                                    label: (context) => `${context.label}: ${formatCurrency(context.raw)}`
+                                }
+                            }
+                        }
+                    }
+                });
+            };
+
+            form.addEventListener('submit', async (e) => {
+                e.preventDefault();
+                const formData = new FormData(form);
+                const newTransaction = {
+                    type: formData.get('type'),
+                    concepto: formData.get('concepto'),
+                    monto: parseFloat(formData.get('monto')),
+                    timestamp: Date.now() // Add a timestamp for ordering
+                };
+
+                if (!newTransaction.concepto || isNaN(newTransaction.monto) || newTransaction.monto <= 0) {
+                    // Simple validation feedback
+                    // Using custom modal for alert replacement
+                    const modal = document.createElement('div');
+                    modal.className = 'fixed inset-0 bg-gray-600 bg-opacity-50 overflow-y-auto h-full w-full flex items-center justify-center';
+                    modal.innerHTML = `
+                        <div class="bg-white p-6 rounded-lg shadow-xl max-w-sm mx-auto text-center">
+                            <p class="text-lg font-semibold mb-4">Error de Validación</p>
+                            <p class="text-gray-700 mb-6">Por favor, ingresa un concepto y un monto válido.</p>
+                            <button id="close-modal" class="bg-emerald-600 text-white font-bold py-2 px-4 rounded-lg hover:bg-emerald-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-emerald-500">Entendido</button>
+                        </div>
+                    `;
+                    document.body.appendChild(modal);
+                    document.getElementById('close-modal').addEventListener('click', () => modal.remove());
+                    return;
+                }
+                
+                try {
+                    await addDoc(collection(db, `artifacts/${appId}/users/${userId}/transactions`), newTransaction);
+                    form.reset();
+                    // set radio back to ingreso
+                    form.querySelector('input[name="type"][value="ingreso"]').checked = true;
+                } catch (error) {
+                    console.error("Error adding document: ", error);
+                    // Using custom modal for alert replacement
+                    const modal = document.createElement('div');
+                    modal.className = 'fixed inset-0 bg-gray-600 bg-opacity-50 overflow-y-auto h-full w-full flex items-center justify-center';
+                    modal.innerHTML = `
+                        <div class="bg-white p-6 rounded-lg shadow-xl max-w-sm mx-auto text-center">
+                            <p class="text-lg font-semibold mb-4">Error al Guardar</p>
+                            <p class="text-gray-700 mb-6">No se pudo guardar la transacción. Inténtalo de nuevo.</p>
+                            <button id="close-modal" class="bg-emerald-600 text-white font-bold py-2 px-4 rounded-lg hover:bg-emerald-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-emerald-500">Entendido</button>
+                        </div>
+                    `;
+                    document.body.appendChild(modal);
+                    document.getElementById('close-modal').addEventListener('click', () => modal.remove());
+                }
+            });
+            
+            chartTabs.forEach(button => {
+                button.addEventListener('click', () => {
+                    const chartToShow = button.dataset.chart;
+
+                    // Update button styles
+                    chartTabs.forEach(btn => btn.classList.remove('active', 'text-emerald-600', 'border-emerald-500'));
+                    button.classList.add('active', 'text-emerald-600', 'border-emerald-500');
+
+                    // Show/hide chart containers
+                    Object.values(chartContainers).forEach(container => container.classList.add('hidden'));
+                    chartContainers[chartToShow].classList.remove('hidden');
+                });
+            });
+
+            // Firebase Authentication and Data Listener
+            onAuthStateChanged(auth, async (user) => {
+                if (user) {
+                    userId = user.uid;
+                    userIdEl.textContent = userId;
+                    const transactionsCollectionRef = collection(db, `artifacts/${appId}/users/${userId}/transactions`);
+                    const q = query(transactionsCollectionRef); // No orderBy() to avoid index issues. Data will be sorted in JS.
+
+                    onSnapshot(q, (snapshot) => {
+                        transactions = [];
+                        snapshot.forEach((doc) => {
+                            transactions.push({ id: doc.id, ...doc.data() });
+                        });
+                        // Sort transactions by timestamp in descending order (most recent first)
+                        transactions.sort((a, b) => b.timestamp - a.timestamp);
+                        updateUI();
+                    }, (error) => {
+                        console.error("Error listening to transactions: ", error);
+                        // Using custom modal for alert replacement
+                        const modal = document.createElement('div');
+                        modal.className = 'fixed inset-0 bg-gray-600 bg-opacity-50 overflow-y-auto h-full w-full flex items-center justify-center';
+                        modal.innerHTML = `
+                            <div class="bg-white p-6 rounded-lg shadow-xl max-w-sm mx-auto text-center">
+                                <p class="text-lg font-semibold mb-4">Error de Conexión</p>
+                                <p class="text-gray-700 mb-6">No se pudieron cargar las transacciones. Por favor, verifica tu conexión.</p>
+                                <button id="close-modal" class="bg-emerald-600 text-white font-bold py-2 px-4 rounded-lg hover:bg-emerald-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-emerald-500">Entendido</button>
+                            </div>
+                        `;
+                        document.body.appendChild(modal);
+                        document.getElementById('close-modal').addEventListener('click', () => modal.remove());
+                    });
+                } else {
+                    try {
+                        const __initial_auth_token = typeof window.__initial_auth_token !== 'undefined' ? window.__initial_auth_token : null;
+                        if (__initial_auth_token) {
+                            await signInWithCustomToken(auth, __initial_auth_token);
+                        } else {
+                            await signInAnonymously(auth);
+                        }
+                    } catch (error) {
+                        console.error("Error signing in: ", error);
+                        userIdEl.textContent = 'Error de autenticación';
+                        // Using custom modal for alert replacement
+                        const modal = document.createElement('div');
+                        modal.className = 'fixed inset-0 bg-gray-600 bg-opacity-50 overflow-y-auto h-full w-full flex items-center justify-center';
+                        modal.innerHTML = `
+                            <div class="bg-white p-6 rounded-lg shadow-xl max-w-sm mx-auto text-center">
+                                <p class="text-lg font-semibold mb-4">Error de Autenticación</p>
+                                <p class="text-gray-700 mb-6">No se pudo iniciar sesión. Algunas funcionalidades pueden estar limitadas.</p>
+                                <button id="close-modal" class="bg-emerald-600 text-white font-bold py-2 px-4 rounded-lg hover:bg-emerald-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-emerald-500">Entendido</button>
+                            </div>
+                        `;
+                        document.body.appendChild(modal);
+                        document.getElementById('close-modal').addEventListener('click', () => modal.remove());
+                    }
+                }
+            });
+
+            // Initial render (will be updated by onSnapshot)
+            updateUI();
+            // Set default active tab style programmatically
+            document.querySelector('.tab-button[data-chart="summary"]').classList.add('active', 'text-emerald-600', 'border-emerald-500');
+
+        });
+    </script>
+</body>
+</html>
